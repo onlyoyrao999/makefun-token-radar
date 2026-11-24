@@ -1,38 +1,49 @@
-// The token radar's model, radar-2: one snapshot of the protocol universe in, one ranked board out.
+// Token Radar — the value model, radar-2.
 //
-// The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and may add
-// pre-token protocols below the watchlist floor: the early rows the radar exists to find. A protocol is
-// pre-token when its index entry records no token (no market cap, no CoinGecko id, no symbol); the
-// snapshot's live-token protocols are kept apart and shown as the market's own values, never mixed into
-// the ranked board.
+// One snapshot of the protocol universe in, one ranked board out. The board
+// covers every slug in the snapshot's watchlist (the floor, never a ceiling)
+// and adds the pre-token protocols below the watchlist floor with the most
+// TVL: the early rows the radar exists to find. A protocol is pre-token when
+// its record carries no token (no market cap, no CoinGecko id, no symbol);
+// the snapshot's live-token protocols are kept apart and shown as the
+// market's own values, never mixed into the ranked board.
 //
-// Implied value follows only from the snapshot's own figures. Four signals, each stated in the
-// dashboard so a reader can check the arithmetic row by row:
+// Implied value follows only from the snapshot's own figures, four signals
+// combined, each stated in the dashboard so a reader can check the
+// arithmetic row by row:
 //
 //   size       = tvl_usd x BASE_MULTIPLE x (tvl_usd / TVL_ANCHOR) ^ -TVL_DAMPING
-//                TVL is the value, but a straight line lets the two biggest protocols decide the
-//                whole board: a 50x TVL gap drowns every other signal. The damping exponent (0.25
-//                around a $100M anchor) keeps the median protocol's implied value at 0.25 x its TVL
-//                while compressing the giants, so growth and age can still reorder the board.
+//                TVL is the value, but a straight line lets the two biggest
+//                protocols decide the whole board: a 50x TVL gap drowns every
+//                other signal. The damping exponent (0.25 around a $100M
+//                anchor) keeps the median protocol's implied value at 0.25x
+//                its TVL while compressing the giants, so growth and age can
+//                still reorder the board.
 //   growth     = clamp(change_7d, -60, 120) per cent
 //   growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
-//                Seven-day momentum: a protocol whose TVL is rising into its launch window is worth
-//                more than one the same size whose TVL is bleeding out.
+//                Seven-day momentum: a protocol whose TVL is rising into its
+//                launch window is worth more than one the same size whose
+//                TVL is bleeding out.
 //   seasoning  = 0.6 + 0.4 x age / 900                       (age <= 900 days)
 //              = 1.0 - 0.25 x min((age - 900) / 2100, 1)    (age > 900 days)
-//                How long the protocol has run with no token. A young protocol has not proven it can
-//                hold TVL; a proven one in its second or third year is in the launch window; one that
-//                has run four years and still has no token has had its chances, so the curve eases
-//                down instead of paying age forever. Unknown age counts as 365 days.
+//                How long the protocol has run with no token. A young
+//                protocol has not proven it can hold TVL; a proven one in its
+//                second or third year is in the launch window; one that has
+//                run four years and still has no token has had its chances,
+//                so the curve eases down instead of paying age forever.
+//                Unknown age counts as 365 days.
 //   breadth    = 1 + 0.03 x min(chains - 1, 4)
-//                Protocols live on more chains have more surface for a token to land on; a
-//                single-chain protocol scores 1.00, five or more chains 1.12.
+//                Protocols live on more chains have more surface for a token
+//                to land on; a single-chain protocol scores 1.00, five or
+//                more chains 1.12.
 //   implied    = max(1, round(size x growthMult x seasoning x breadth))
 //
-// The constants are the model's, stated in the dashboard and changeable in the model sandbox. No
-// protocol name is ever special-cased: the same function scores every row. Every row also carries
-// an eight-step farm plan, derived from the same record (category, chains, TVL, age): a first
-// position, a weekly action, a hold, a claim, a log, a contract check, and a second-chain position.
+// The constants are the model's, stated in the dashboard and changeable in
+// the model sandbox. No protocol name is ever special-cased: the same
+// function scores every row. Every row also carries an eight-step farm plan,
+// derived from the same record (category, chains, TVL, age): a first
+// position, a weekly action, a hold, a claim, a log, a contract check, and a
+// second-chain position.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -194,6 +205,8 @@ function finite(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
+
 /** A whole day count from `from` to `to`, clamped at zero; null when either date is absent or bad. */
 export function ageDays(asOf: string, listedAt: string | null): number | null {
   if (listedAt === null) return null;
@@ -303,8 +316,6 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     farm_steps: farmSteps(s.p, s.age).map(stepText),
   }));
 }
-
-const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
 
 /** A step as one string: its action, then its cost and time, within the gate's 20..600 characters. */
 export function stepText(step: FarmStep): string {
