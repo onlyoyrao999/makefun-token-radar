@@ -1,7 +1,12 @@
-// Token Radar's plain dashboard, radar-2. It reads window.RADAR (written beside dashboard/ by
-// main.ts) and renders the ranked board, a filterable table, a per-protocol detail drawer with the
-// model's own inputs and the protocol's farm plan, and a sandbox that re-scores the board live
+// Token Radar's dashboard, radar-2. It reads window.RADAR (written beside
+// dashboard/ by main.ts) and renders the ranked board, a filterable table, a
+// per-protocol detail drawer with the model's own inputs and the protocol's
+// farm plan, a live-token tab, and a sandbox that re-scores the board live
 // under changed model constants. No network: every byte it shows is in data.js.
+//
+// The page never trusts its own copy of the numbers: impliedOf() below is
+// the same arithmetic lib/model.ts runs, and the detail view recomputes each
+// row and says whether the recomputed number matches board.json.
 (function () {
   'use strict';
 
@@ -11,6 +16,8 @@
   var state = { q: '', category: 'all', tab: 'pre-token', sort: 'implied', dir: -1, selected: null, sandbox: null };
 
   var usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+
+  /** A dollar amount, shortened: $2.75B, $543.6M, $150. */
   function fmtUsd(n) {
     if (n === null || n === undefined || !isFinite(n)) return 'n/a';
     if (Math.abs(n) >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
@@ -18,21 +25,27 @@
     if (Math.abs(n) >= 1e3) return '$' + Math.round(n / 1e3) + 'K';
     return usd.format(n);
   }
+
+  /** A per-cent change with its sign: +5.64%, -2.19%, or n/a. */
   function fmtPct(n) {
     if (n === null || n === undefined || !isFinite(n)) return 'n/a';
     return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
   }
+
+  /** An age in days as 45d or 1.5y; unknown stays unknown. */
   function fmtAge(days) {
     if (days === null || days === undefined) return 'unknown';
     if (days >= 365) return (days / 365).toFixed(1) + 'y';
     return Math.max(0, Math.round(days)) + 'd';
   }
+
+  /** A multiplier to four decimals, for the detail view's equation. */
   function fmtMult(n) { return (Math.round(n * 10000) / 10000).toFixed(4); }
 
-  // The model in one function: the page recomputes a row from the snapshot figures and checks the
-  // number board.json carries, so the page's code and the board's data are visibly the same arithmetic.
-  // radar-2: TVL is damped around a $100M anchor, age seasons up to a peak and eases down after it,
-  // and multi-chain protocols earn a small breadth bonus. See lib/model.ts for the same function.
+  // --- The model, again, in the page -------------------------------------
+  // radar-2: TVL is damped around a $100M anchor, age seasons up to a peak
+  // and eases down after it, and multi-chain protocols earn a small breadth
+  // bonus. See lib/model.ts for the same function in TypeScript.
   function seasoningOf(age, model) {
     if (age <= model.seasoning_peak_days) {
       return model.seasoning_floor + (1 - model.seasoning_floor) * (age / model.seasoning_peak_days);
@@ -40,6 +53,7 @@
     var late = Math.min((age - model.seasoning_peak_days) / model.seasoning_late_days, 1);
     return 1 - model.seasoning_late_drop * late;
   }
+
   function impliedOf(row, model) {
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var growthMult = 1 + (growth / 100) * model.growth_weight;
@@ -51,6 +65,8 @@
     var base = row.tvl_usd * model.base_multiple * tvlFactor;
     return Math.max(1, Math.round(base * growthMult * seasoning * breadth));
   }
+
+  /** The four multipliers of one row, for the detail view's equation. */
   function partsOf(row, model) {
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var age = row.age_days === null || row.age_days === undefined ? model.unknown_age_days : row.age_days;
@@ -62,7 +78,8 @@
       breadth: 1 + model.chain_step * Math.min(Math.max(chains - 1, 0), model.chain_max_steps)
     };
   }
-  // The model the page scores with: the submitted one, or the sandbox's overrides.
+
+  /** The model the page scores with: the submitted one, or the sandbox's overrides. */
   function effModel() {
     if (!state.sandbox) return DATA.model;
     var m = {};
@@ -70,10 +87,13 @@
     Object.keys(state.sandbox).forEach(function (k) { m[k] = state.sandbox[k]; });
     return m;
   }
+
+  /** The implied value to show for a row: the board's, or the sandbox's re-score. */
   function shownImplied(row) {
     return state.sandbox ? impliedOf(row, effModel()) : row.implied_value_usd;
   }
 
+  // --- A tiny DOM helper ---------------------------------------------------
   function el(tag, attrs) {
     var node = document.createElement(tag);
     if (attrs) {
@@ -95,21 +115,25 @@
     return node;
   }
 
-  // The farm plan is the same derivation main.ts writes to board.json: category, chains, TVL and age
-  // decide the action, the capital, the hold and every cost and time. No name is special-cased.
+  // --- The farm plan, derived the same way board.json derives it ----------
+  // Category, chains, TVL and age decide the action, the capital, the hold
+  // and every cost and time. No name is special-cased.
   function chainOf(p) { return p.chains && p.chains.length > 0 ? p.chains[0] : 'its main chain'; }
+
   function capitalFor(p) {
     if (p.tvl_usd >= 5e9) return 250;
     if (p.tvl_usd >= 1e9) return 150;
     if (p.tvl_usd >= 1e8) return 100;
     return 50;
   }
+
   function holdDaysFor(age) {
     if (age === null || age === undefined) return 30;
     if (age < 180) return 60;
     if (age < 365) return 45;
     return 30;
   }
+
   function actionFor(p, capital, chain) {
     var c = (p.category || '').toLowerCase();
     var name = p.name;
@@ -125,6 +149,7 @@
     if (c.indexOf('insurance') >= 0) return 'Buy $' + capital + ' of cover from ' + name + ' on ' + chain + ' and keep the policy.';
     return 'Deposit $' + capital + ' of USDC into ' + name + ' on ' + chain + ' and keep the position open.';
   }
+
   function weeklyActionFor(p) {
     var c = (p.category || '').toLowerCase();
     var name = p.name;
@@ -140,6 +165,7 @@
     if (c.indexOf('insurance') >= 0) return 'Check the cover ' + name + ' sells each week and renew it before it lapses.';
     return 'Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.';
   }
+
   function secondActionFor(p, capital) {
     var chain = p.chains && p.chains.length > 1 ? p.chains[1] : chainOf(p);
     var c = (p.category || '').toLowerCase();
@@ -155,12 +181,15 @@
     if (c.indexOf('rwa') >= 0) return "Mint $" + small + " of the protocol's yield asset on " + chain + ' and hold it alongside the first mint.';
     return 'Repeat the same action with $' + small + ' on ' + chain + ' through ' + name + ', so the wallet shows activity on a second chain.';
   }
+
   function stepText(step) {
     var s = step.text + ' Cost: ' + step.cost + '. Time: ' + step.time + '.';
     if (s.length > 600) s = s.slice(0, 596) + '...';
     if (s.length < 20) s = s + " Hold the position and check the protocol's own page.";
     return s;
   }
+
+  /** Eight steps: set up, act, act weekly, hold, claim, log, check contracts, act on a second chain. */
   function farmSteps(p) {
     var chain = chainOf(p);
     var capital = capitalFor(p);
@@ -177,6 +206,7 @@
     ].map(stepText);
   }
 
+  // --- URL hash: the search, the category and the open protocol survive a reload ---
   function readHash() {
     var hash = window.location.hash.replace(/^#/, '');
     if (!hash) return;
@@ -185,6 +215,7 @@
     if (params.get('p')) state.selected = params.get('p');
     if (params.get('category')) state.category = params.get('category');
   }
+
   function writeHash() {
     var params = new URLSearchParams();
     if (state.q) params.set('q', state.q);
@@ -195,6 +226,7 @@
     else window.history.replaceState(null, '', window.location.pathname + window.location.search);
   }
 
+  /** The rows the current search and category leave standing. */
   function rows() {
     var q = state.q.trim().toLowerCase();
     return DATA.rows.filter(function (r) {
@@ -204,6 +236,8 @@
       return hay.indexOf(q) >= 0;
     });
   }
+
+  /** The filtered rows in the chosen sort order, ties broken by slug. */
   function sortedRows(list) {
     var key = state.sort;
     return list.slice().sort(function (a, b) {
@@ -264,6 +298,7 @@
     );
   }
 
+  /** A sortable column header: click to sort, click again to reverse. */
   function sortHeader(key, label) {
     return el('th', { scope: 'col' },
       el('button', { type: 'button', onclick: function () { if (state.sort === key) state.dir = -state.dir; else { state.sort = key; state.dir = -1; } render(); } },
@@ -328,6 +363,7 @@
     );
   }
 
+  /** The live-token tab: market caps are facts, not a model, so they sit apart from the ranking. */
   function liveTable() {
     var tbody = el('tbody');
     DATA.live.forEach(function (r) {
@@ -369,9 +405,9 @@
     );
   }
 
+  /** The model panel: the formula, what each signal means, and the sandbox. */
   function modelPanel() {
     var m = effModel();
-    var submitted = DATA.model;
     var formula = 'implied = round( tvl_usd x ' + m.base_multiple + ' x (tvl_usd / ' + Math.round(m.tvl_anchor_usd / 1e6) + 'M) ^ -' + m.tvl_damping +
       ' x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ')' +
       ' x seasoning(age_days) x (1 + ' + m.chain_step + ' x min(chains - 1, ' + m.chain_max_steps + ')) )';
@@ -399,6 +435,7 @@
   var dialog = el('dialog', { class: 'detail', id: 'detail', 'aria-labelledby': 'detail-title' });
   dialog.addEventListener('close', function () { state.selected = null; writeHash(); });
 
+  /** Open the detail drawer for one protocol: its model inputs and its farm plan. */
   function openDetail(slug) {
     var row = DATA.rows.filter(function (r) { return r.slug === slug; })[0];
     if (!row) return;
